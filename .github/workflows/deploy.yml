@@ -1,0 +1,74 @@
+name: Deploy to GitHub Pages
+
+# 流程:
+#   Pull Request  → 只跑「型別檢查 + 建置」,確認沒壞掉(不部署)
+#   push 到 main  → 檢查 + 建置 + 部署到 GitHub Pages
+#   手動執行      → Actions 分頁 → Run workflow
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一個分支只保留最新一次執行;部署中的不會被取消,避免網站更新到一半
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # vite-plugin-singlefile 會把 JS / CSS 全部內嵌進 dist/index.html,
+      # 所以放在 /<repo>/ 子路徑底下也不需要設定 vite 的 base。
+      - name: Build
+        run: npm run build
+
+      - name: Create SPA fallback (404.html)
+        run: cp dist/index.html dist/404.html
+
+      - name: Setup Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    # PR 不部署,只有 main / 手動執行才會發佈
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
